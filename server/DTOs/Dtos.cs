@@ -40,5 +40,6 @@ public record GammaMarketSummary(
     string Question,
     string Slug,
     string YesTokenId,
-    string NoTokenId
+    string NoTokenId,
+    bool Active
 );

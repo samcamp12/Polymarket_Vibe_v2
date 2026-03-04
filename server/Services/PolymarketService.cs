@@ -198,6 +198,9 @@ public class PolymarketService
         if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(yesTokenId))
             return null;
 
-        return new GammaMarketSummary(id, question, slug, yesTokenId, noTokenId);
+        // active = true when the market is still open; closed/resolved markets have active=false
+        var active = node["active"]?.GetValue<bool>() ?? true;
+
+        return new GammaMarketSummary(id, question, slug, yesTokenId, noTokenId, active);
     }
 }

@@ -1,0 +1,439 @@
+================================================================================
+POLYMARKET WATCHLIST & ALERTS — CODING AGENT REFERENCE
+================================================================================
+Last updated: 2026-03-04
+Purpose: Provide full project context so coding agents produce accurate,
+         non-hallucinated code changes.
+
+================================================================================
+1. PROJECT OVERVIEW
+================================================================================
+
+A full-stack app that lets users create watchlists of Polymarket prediction
+markets, track live YES/NO prices, and set threshold rules that flag markets
+when the YES price falls within a specified range.
+
+Stack:
+  Frontend : React 18 + TypeScript + Vite 5 + Tailwind CSS 3 + axios
+  Backend  : ASP.NET Core 8 (C#) Web API + Entity Framework Core 8 (SQL Server)
+  Database : SQL Server (LocalDB for dev)
+  External : Polymarket Gamma API (search/markets) + CLOB API (midpoints)
+
+================================================================================
+2. FOLDER STRUCTURE
+================================================================================
+
+/
+├── ARCHITECTURE.md              # System diagram + data flow docs
+├── README.md                    # Setup instructions
+├── schema.sql                   # Raw CREATE TABLE statements
+├── AGENT_REFERENCE.txt          # THIS FILE
+│
+├── client/                      # React + Vite + TypeScript + Tailwind
+│   ├── index.html
+│   ├── package.json
+│   ├── vite.config.ts           # Dev proxy: /api → http://localhost:5000
+│   ├── tailwind.config.js
+│   ├── postcss.config.js
+│   ├── tsconfig.json
+│   └── src/
+│       ├── main.tsx             # ReactDOM.createRoot + BrowserRouter
+│       ├── App.tsx              # Routes + NavLink to "/"
+│       ├── api.ts               # axios wrappers + TypeScript interfaces
+│       ├── index.css            # Tailwind @tailwind directives
+│       └── pages/
+│           ├── WatchlistsPage.tsx       # List/create watchlists
+│           ├── WatchlistDetailPage.tsx   # View markets, poll prices, filter/sort
+│           ├── AddMarketPage.tsx         # Search Polymarket + add to watchlist
+│           └── RulesPage.tsx            # Create/edit/delete threshold rules
+│
+└── server/                      # ASP.NET Core 8 Web API
+    ├── PolymarketWatchlist.csproj
+    ├── PolymarketWatchlist.sln
+    ├── Program.cs               # DI setup, EF Core, CORS, Swagger, EnsureCreated
+    ├── appsettings.json         # Connection string (LocalDB)
+    ├── Controllers/
+    │   ├── SearchController.cs       # GET /api/search?q=
+    │   ├── WatchlistsController.cs   # CRUD watchlists + markets + view
+    │   └── RulesController.cs        # POST/DELETE rules
+    ├── Data/
+    │   └── AppDbContext.cs           # DbSets + OnModelCreating (Fluent API)
+    ├── DTOs/
+    │   └── Dtos.cs                   # All request/response records
+    ├── Models/
+    │   ├── Watchlist.cs
+    │   ├── WatchlistMarket.cs
+    │   ├── Rule.cs
+    │   ├── LatestPrice.cs
+    │   └── FlagState.cs
+    ├── Services/
+    │   └── PolymarketService.cs      # Gamma search + CLOB midpoints
+    ├── BackgroundServices/
+    │   └── PricePollingService.cs    # 20s interval background worker
+    ├── Migrations/                   # EF Core migrations (InitialCreate)
+    └── Properties/
+        └── launchSettings.json
+
+================================================================================
+3. EXACT DEPENDENCY VERSIONS
+================================================================================
+
+--- CLIENT (package.json) ---
+Dependencies:
+  axios             ^1.6.7
+  react             ^18.2.0
+  react-dom         ^18.2.0
+  react-router-dom  ^6.22.3
+
+DevDependencies:
+  @types/react          ^18.2.55
+  @types/react-dom      ^18.2.19
+  @vitejs/plugin-react  ^4.2.1
+  autoprefixer          ^10.4.17
+  postcss               ^8.4.35
+  tailwindcss           ^3.4.1
+  typescript            ^5.2.2
+  vite                  ^5.1.3
+
+--- SERVER (PolymarketWatchlist.csproj) ---
+  Target Framework: net8.0
+  Nullable: enable
+  ImplicitUsings: enable
+  RootNamespace: PolymarketWatchlist
+
+NuGet Packages:
+  Microsoft.EntityFrameworkCore.SqlServer  8.0.0
+  Microsoft.EntityFrameworkCore.Design     8.0.0
+  Swashbuckle.AspNetCore                   6.5.0
+
+================================================================================
+4. API ENDPOINTS (BACKEND)
+================================================================================
+
+GET    /api/search?q={query}
+  → Proxies to Gamma API, returns GammaMarketSummary[]
+
+GET    /api/watchlists
+  → Returns WatchlistDto[] (id, name, createdAt)
+
+POST   /api/watchlists
+  Body: { "name": string }
+  → Returns WatchlistDto
+
+POST   /api/watchlists/{id}/markets
+  Body: { "marketId": string, "question": string, "yesTokenId": string, "noTokenId": string }
+  → Returns { id, marketId, question, yesTokenId, noTokenId }
+
+DELETE /api/watchlists/{id}/markets/{watchlistMarketId}
+  → 204 No Content
+
+GET    /api/watchlists/{id}/view?inRangeOnly=true&sort=yes_desc
+  Sort options: "yes_asc", "yes_desc", "flag"
+  → Returns WatchlistViewRow[]
+
+POST   /api/rules
+  Body: { "watchlistMarketId": int, "lowThreshold": decimal, "highThreshold": decimal }
+  Constraints: 0 ≤ low < high ≤ 1
+  Note: Replaces any existing rule for that market (MVP: one rule per market)
+  → Returns RuleDto
+
+DELETE /api/rules/{id}
+  → 204 No Content
+
+================================================================================
+5. CLIENT ROUTES (React Router v6)
+================================================================================
+
+/                                        → WatchlistsPage
+/watchlists/:id                         → WatchlistDetailPage
+/watchlists/:id/add-market              → AddMarketPage
+/watchlists/:id/rules/:marketId         → RulesPage
+
+================================================================================
+6. DATABASE SCHEMA (SQL Server)
+================================================================================
+
+TABLE Watchlist
+  Id          INT IDENTITY PK
+  Name        NVARCHAR(200) NOT NULL
+  CreatedAt   DATETIME2 DEFAULT GETUTCDATE()
+
+TABLE WatchlistMarket
+  Id              INT IDENTITY PK
+  WatchlistId     INT FK → Watchlist(Id) CASCADE
+  MarketId        NVARCHAR(100) NOT NULL     -- Polymarket market id/slug
+  Question        NVARCHAR(500) NOT NULL
+  YesTokenId      NVARCHAR(100) NOT NULL
+  NoTokenId       NVARCHAR(100) NOT NULL
+  AddedAt         DATETIME2 DEFAULT GETUTCDATE()
+
+TABLE Rule
+  Id                  INT IDENTITY PK
+  WatchlistMarketId   INT FK → WatchlistMarket(Id) CASCADE
+  LowThreshold        DECIMAL(5,4) NOT NULL   -- e.g. 0.6200
+  HighThreshold       DECIMAL(5,4) NOT NULL   -- e.g. 0.6800
+  CreatedAt           DATETIME2 DEFAULT GETUTCDATE()
+
+TABLE LatestPrice
+  TokenId     NVARCHAR(100) PK               -- string primary key
+  MidPrice    DECIMAL(10,6) NOT NULL
+  UpdatedAt   DATETIME2 DEFAULT GETUTCDATE()
+
+TABLE FlagState
+  WatchlistMarketId   INT PK FK → WatchlistMarket(Id) CASCADE
+  IsInRange           BIT DEFAULT 0
+  CheckedAt           DATETIME2 DEFAULT GETUTCDATE()
+
+Indexes:
+  IX_WatchlistMarket_WatchlistId ON WatchlistMarket(WatchlistId)
+  IX_Rule_WatchlistMarketId      ON Rule(WatchlistMarketId)
+
+Relationships summary:
+  Watchlist 1→N WatchlistMarket
+  WatchlistMarket 1→N Rule  (but MVP enforces max 1 rule per market)
+  WatchlistMarket 1→1 FlagState
+  LatestPrice is standalone, keyed on TokenId (not FK to WatchlistMarket)
+
+================================================================================
+7. EF CORE MODEL DETAILS
+================================================================================
+
+AppDbContext DbSets:
+  Watchlists       → DbSet<Watchlist>
+  WatchlistMarkets → DbSet<WatchlistMarket>
+  Rules            → DbSet<Rule>
+  LatestPrices     → DbSet<LatestPrice>
+  FlagStates       → DbSet<FlagState>
+
+Fluent API configuration in OnModelCreating:
+  - Table names match SQL exactly: "Watchlist", "WatchlistMarket", "Rule",
+    "LatestPrice", "FlagState"
+  - LatestPrice: string PK on TokenId, HasMaxLength(100), MidPrice precision(10,6)
+  - FlagState: PK = WatchlistMarketId, 1-to-1 with WatchlistMarket via
+    HasOne().WithOne().HasForeignKey<FlagState>(x => x.WatchlistMarketId)
+  - Rule thresholds: precision(5,4)
+  - All cascading deletes from parent tables
+
+Navigation properties:
+  Watchlist.Markets          → ICollection<WatchlistMarket>
+  WatchlistMarket.Watchlist  → Watchlist
+  WatchlistMarket.Rules      → ICollection<Rule>
+  WatchlistMarket.FlagState  → FlagState?
+  WatchlistMarket.YesPrice   → LatestPrice? (exists in model but NOT mapped in Fluent API)
+  WatchlistMarket.NoPrice    → LatestPrice? (exists in model but NOT mapped in Fluent API)
+  Rule.WatchlistMarket       → WatchlistMarket
+  FlagState.WatchlistMarket  → WatchlistMarket
+
+================================================================================
+8. TYPESCRIPT TYPES (client/src/api.ts)
+================================================================================
+
+interface Watchlist {
+  id: number
+  name: string
+  createdAt: string
+}
+
+interface GammaMarketSummary {
+  id: string
+  question: string
+  slug: string
+  yesTokenId: string
+  noTokenId: string
+}
+
+interface RuleDto {
+  id: number
+  watchlistMarketId: number
+  lowThreshold: number
+  highThreshold: number
+}
+
+interface WatchlistViewRow {
+  watchlistMarketId: number
+  marketId: string
+  question: string
+  yesPct: number | null
+  noPct: number | null
+  isInRange: boolean | null
+  priceUpdatedAt: string | null
+  rule: RuleDto | null
+}
+
+================================================================================
+9. C# DTO RECORDS (server/DTOs/Dtos.cs)
+================================================================================
+
+record CreateWatchlistRequest(string Name)
+record WatchlistDto(int Id, string Name, DateTime CreatedAt)
+record AddMarketRequest(string MarketId, string Question, string YesTokenId, string NoTokenId)
+record CreateRuleRequest(int WatchlistMarketId, decimal LowThreshold, decimal HighThreshold)
+record RuleDto(int Id, int WatchlistMarketId, decimal LowThreshold, decimal HighThreshold)
+record WatchlistViewRow(
+    int WatchlistMarketId, string MarketId, string Question,
+    decimal? YesPct, decimal? NoPct, bool? IsInRange,
+    DateTime? PriceUpdatedAt, RuleDto? Rule)
+record GammaMarketSummary(string Id, string Question, string Slug, string YesTokenId, string NoTokenId)
+
+================================================================================
+10. EXTERNAL API DETAILS (Polymarket)
+================================================================================
+
+GAMMA API (market search & metadata):
+  Base URL: https://gamma-api.polymarket.com
+  Search:   GET /public-search?q={query}
+    Response: { "events": [ { "markets": [ { ... } ] } ] }
+    Market fields used: id, question, slug, clobTokenIds (JSON string array),
+                        outcomes (JSON string array like ["YES","NO"])
+  Single:   GET /markets/{marketId}
+
+CLOB API (live prices):
+  Base URL: https://clob.polymarket.com
+  Midpoints: POST /midpoints
+    Request body: [{ "token_id": "..." }, ...]
+    Response: { "tokenId1": "0.543", "tokenId2": "0.457", ... }
+    Values are decimal strings (0 to 1).
+
+Token ID parsing logic (PolymarketService.ParseMarketNode):
+  - clobTokenIds is a JSON-encoded string array in the market object
+  - outcomes is a JSON-encoded string array like ["YES", "NO"]
+  - Match by index: outcomes[i] ↔ clobTokenIds[i]
+  - Extract yesTokenId where outcome == "YES", noTokenId where outcome == "NO"
+
+================================================================================
+11. BACKGROUND SERVICE BEHAVIOR
+================================================================================
+
+PricePollingService (BackgroundService):
+  - Interval: 20 seconds
+  - Registered via: builder.Services.AddHostedService<PricePollingService>()
+  - Creates its own DI scope each tick (IServiceScopeFactory)
+  - Tick steps:
+    1. Load all WatchlistMarkets (with .Include(m => m.Rules))
+    2. Collect all unique YES + NO token IDs
+    3. POST to CLOB /midpoints for batch price fetch
+    4. Upsert LatestPrice rows (FindAsync → Add or Update)
+    5. Evaluate each Rule: YES price in [low, high] → FlagState.IsInRange
+    6. Upsert FlagState rows
+  - Uses db.SaveChangesAsync twice (once for prices, once for flags)
+
+================================================================================
+12. DI REGISTRATION (Program.cs)
+================================================================================
+
+  AddDbContext<AppDbContext>(opt => opt.UseSqlServer(...))
+  AddHttpClient<PolymarketService>()    ← registers as Transient with named HttpClient
+  AddHostedService<PricePollingService>()
+  AddControllers()
+  AddEndpointsApiExplorer()
+  AddSwaggerGen()
+  AddCors → allows http://localhost:5173, http://localhost:3000
+
+DO NOT also call AddScoped<PolymarketService>() — that would override
+the AddHttpClient registration and break HttpClient injection.
+
+Middleware pipeline:
+  app.UseSwagger()
+  app.UseSwaggerUI()
+  app.UseCors()
+  app.MapControllers()
+  app.Run()
+
+At startup: db.Database.EnsureCreated() in a scope (dev convenience).
+
+================================================================================
+13. VITE DEV PROXY
+================================================================================
+
+vite.config.ts:
+  server.port = 5173
+  server.proxy: '/api' → 'http://localhost:5000' (changeOrigin: true)
+
+This means in dev, the client runs on :5173 and all /api/* calls are proxied
+to the ASP.NET backend on :5000. No CORS issues during development.
+
+================================================================================
+14. CORS CONFIGURATION
+================================================================================
+
+Backend allows:
+  Origins: http://localhost:5173, http://localhost:3000
+  Methods: Any
+  Headers: Any
+
+================================================================================
+15. STYLING APPROACH
+================================================================================
+
+- Tailwind CSS 3 with utility classes directly in JSX
+- Dark theme: bg-gray-950, bg-gray-900, bg-gray-800, text-gray-100, etc.
+- Accent color: purple (purple-300, purple-400, purple-500, purple-600)
+- Data colors: emerald-400 for YES%, rose-400 for NO%
+- Green for "IN RANGE" badges (green-700 bg, green-100 text)
+- All styling is inline Tailwind — no separate CSS component files
+
+================================================================================
+16. KEY BEHAVIORAL NOTES
+================================================================================
+
+- Prices are stored as decimals 0.0000–1.0000 (not percentages)
+- Frontend multiplies by 100 for display: (v * 100).toFixed(1) + "%"
+- Rule thresholds are also stored as decimals (0–1); UI inputs are percentages
+  that get divided by 100 before sending to API
+- WatchlistDetailPage polls every 30 seconds (POLL_INTERVAL_MS = 30_000)
+- Backend polls Polymarket every 20 seconds
+- MVP: one rule per market (POST /api/rules replaces existing)
+- RulesPage receives question + existing rule via React Router location.state
+- Client uses axios with baseURL '/api' (relative, handled by Vite proxy)
+
+================================================================================
+17. CONNECTION STRING
+================================================================================
+
+Default (appsettings.json):
+  Data Source=(localdb)\MSSQLLocalDB;Database=PolymarketWatchlistDb;
+  Integrated Security=True;Persist Security Info=False;Pooling=False;
+  MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;
+  Application Name="SQL Server Management Studio";Command Timeout=0
+
+================================================================================
+18. COMMON PITFALLS FOR AI AGENTS
+================================================================================
+
+1. Do NOT register PolymarketService with AddScoped/AddTransient manually.
+   It's already registered via AddHttpClient<PolymarketService>().
+
+2. LatestPrice has a STRING primary key (TokenId), not an int.
+
+3. FlagState uses WatchlistMarketId as BOTH its PK and FK — it's a 1-to-1.
+
+4. WatchlistMarket.YesPrice and .NoPrice navigation properties exist in the
+   model class but are NOT configured with Fluent API relationships.
+   Prices are loaded separately via manual LINQ queries.
+
+5. The Gamma API returns clobTokenIds and outcomes as JSON-encoded STRING
+   fields, not as actual JSON arrays. They must be deserialized separately.
+
+6. Rule thresholds use DECIMAL(5,4) — max value 9.9999. Since they represent
+   probabilities (0–1), this is fine, but don't use values outside this range.
+
+7. React Router v6 is used — not v5. Use useParams, useNavigate, Routes/Route.
+
+8. Tailwind v3 is used — not v4. Config uses content[] array, not the v4
+   @tailwind directives approach.
+
+9. The frontend has NO state management library (no Redux, Zustand, etc.).
+   All state is local (useState/useEffect in each page component).
+
+10. There is NO authentication/authorization in the app.
+
+11. The namespace is PolymarketWatchlist (not "Polymarket.Watchlist" etc.).
+
+12. All C# DTOs are records (not classes) in a single Dtos.cs file.
+
+13. EF Core table names are singular: "Watchlist", "Rule", "LatestPrice", etc.
+    DbSet property names are plural: Watchlists, Rules, LatestPrices, etc.
+
+================================================================================
+END OF REFERENCE
+================================================================================

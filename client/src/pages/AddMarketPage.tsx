@@ -13,6 +13,7 @@ export default function AddMarketPage() {
   const [adding, setAdding]     = useState<string | null>(null)  // marketId being added
   const [added, setAdded]       = useState<Set<string>>(new Set())
   const [error, setError]       = useState('')
+  const [activeOnly, setActiveOnly] = useState(true)
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -57,7 +58,7 @@ export default function AddMarketPage() {
       </div>
 
       {/* Search bar */}
-      <form onSubmit={handleSearch} className="flex gap-3 mb-6">
+      <form onSubmit={handleSearch} className="flex gap-3 mb-4">
         <input
           value={query}
           onChange={e => setQuery(e.target.value)}
@@ -73,11 +74,22 @@ export default function AddMarketPage() {
         </button>
       </form>
 
+      {/* Active-only filter */}
+      <label className="flex items-center gap-2 text-sm text-gray-400 mb-5 select-none cursor-pointer">
+        <input
+          type="checkbox"
+          checked={activeOnly}
+          onChange={e => setActiveOnly(e.target.checked)}
+          className="w-4 h-4 accent-purple-500"
+        />
+        Show active markets only
+      </label>
+
       {error && <p className="text-red-400 text-sm mb-4">{error}</p>}
 
       {/* Results */}
       <div className="space-y-3">
-        {results.map(m => (
+        {results.filter(m => !activeOnly || m.active).map(m => (
           <div
             key={m.id}
             className="bg-gray-800 border border-gray-700 rounded-lg px-5 py-4 flex justify-between items-center gap-4"
@@ -101,6 +113,9 @@ export default function AddMarketPage() {
             </button>
           </div>
         ))}
+        {results.length > 0 && activeOnly && results.filter(m => m.active).length === 0 && (
+          <p className="text-gray-500 text-sm">All results are closed/resolved. Uncheck the filter to see them.</p>
+        )}
       </div>
     </div>
   )

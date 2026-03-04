@@ -37,6 +37,33 @@ public class RulesController : ControllerBase
         _db.Rules.Add(rule);
         await _db.SaveChangesAsync();
 
+        // Immediately re-evaluate FlagState using current LatestPrice
+        var market = await _db.WatchlistMarkets.FindAsync(req.WatchlistMarketId);
+        if (market != null)
+        {
+            var yesPrice = await _db.LatestPrices.FindAsync(market.YesTokenId);
+            bool isInRange = yesPrice != null
+                && yesPrice.MidPrice >= req.LowThreshold
+                && yesPrice.MidPrice <= req.HighThreshold;
+
+            var flag = await _db.FlagStates.FindAsync(req.WatchlistMarketId);
+            if (flag != null)
+            {
+                flag.IsInRange = isInRange;
+                flag.CheckedAt = DateTime.UtcNow;
+            }
+            else
+            {
+                _db.FlagStates.Add(new FlagState
+                {
+                    WatchlistMarketId = req.WatchlistMarketId,
+                    IsInRange = isInRange,
+                    CheckedAt = DateTime.UtcNow
+                });
+            }
+            await _db.SaveChangesAsync();
+        }
+
         return Ok(new RuleDto(rule.Id, rule.WatchlistMarketId, rule.LowThreshold, rule.HighThreshold));
     }
 
@@ -46,8 +73,20 @@ public class RulesController : ControllerBase
     {
         var rule = await _db.Rules.FindAsync(id);
         if (rule == null) return NotFound();
+
+        var wmId = rule.WatchlistMarketId;
         _db.Rules.Remove(rule);
         await _db.SaveChangesAsync();
+
+        // Clear FlagState since no rule remains (MVP: one rule per market)
+        var flag = await _db.FlagStates.FindAsync(wmId);
+        if (flag != null)
+        {
+            flag.IsInRange = false;
+            flag.CheckedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync();
+        }
+
         return NoContent();
     }
 }

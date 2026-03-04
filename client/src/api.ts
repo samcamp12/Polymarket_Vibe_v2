@@ -16,6 +16,7 @@ export interface GammaMarketSummary {
   slug: string
   yesTokenId: string
   noTokenId: string
+  active: boolean
 }
 
 export interface RuleDto {
