@@ -64,7 +64,7 @@ export default function WatchlistDetailPage() {
     <div>
       {/* Header */}
       <div className="flex items-center gap-3 mb-6">
-        <button onClick={() => navigate('/')} className="text-gray-500 hover:text-gray-300 text-sm">
+        <button onClick={() => navigate('/watchlists')} className="text-gray-500 hover:text-gray-300 text-sm">
           ← Back
         </button>
         <h1 className="text-2xl font-bold text-purple-300">Watchlist #{watchlistId}</h1>

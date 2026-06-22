@@ -61,6 +61,23 @@ export const getWatchlistView = (
 export const searchMarkets = (q: string) =>
   api.get<GammaMarketSummary[]>('/search', { params: { q } }).then(r => r.data)
 
+export interface PopularMarket {
+  id: string
+  question: string
+  slug: string
+  yesTokenId: string
+  noTokenId: string
+  yesPct: number | null
+  tag: string | null
+  volume: number | null
+}
+
+export const getPopularMarkets = (tag?: string, limit = 20) => {
+  const params: Record<string, string> = { limit: String(limit) }
+  if (tag) params.tag = tag
+  return api.get<PopularMarket[]>('/markets/popular', { params }).then(r => r.data)
+}
+
 export const addMarket = (
   watchlistId: number,
   market: { marketId: string; question: string; yesTokenId: string; noTokenId: string }

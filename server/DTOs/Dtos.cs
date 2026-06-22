@@ -43,3 +43,15 @@ public record GammaMarketSummary(
     string NoTokenId,
     bool Active
 );
+
+// ---------- Popular markets (home page) ----------
+public record PopularMarketDto(
+    string Id,
+    string Question,
+    string Slug,
+    string YesTokenId,
+    string NoTokenId,
+    double? YesPct,
+    string? Tag,
+    decimal? Volume
+);

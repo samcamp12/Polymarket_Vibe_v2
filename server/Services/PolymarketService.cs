@@ -147,8 +147,23 @@ public class PolymarketService
     }
 
     // -----------------------------------------------------------------------
-    // Helper
+    // Helpers
     // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Safely converts any scalar JsonNode to a string regardless of whether the
+    /// API serialised it as a JSON string, number, or boolean.
+    /// </summary>
+    private static string? NodeToString(JsonNode? node)
+    {
+        if (node == null) return null;
+        return node.GetValueKind() switch
+        {
+            System.Text.Json.JsonValueKind.String => node.GetValue<string>(),
+            _                                     => node.ToJsonString()
+        };
+    }
+
     /// <summary>
     /// Parses a Gamma Market JSON node into GammaMarketSummary.
     ///
@@ -167,16 +182,15 @@ public class PolymarketService
     {
         if (node == null) return null;
 
-        var id = node["id"]?.GetValue<string>()
-              ?? node["id"]?.GetValue<long>().ToString()
-              ?? node["conditionId"]?.GetValue<string>() ?? "";
-        var question = node["question"]?.GetValue<string>() ?? "";
-        var slug     = node["slug"]?.GetValue<string>() ?? "";
+        var id = NodeToString(node["id"])
+              ?? NodeToString(node["conditionId"]) ?? "";
+        var question = NodeToString(node["question"]) ?? "";
+        var slug     = NodeToString(node["slug"])     ?? "";
 
         // clobTokenIds is a JSON-stringified array: "[\"111\",\"222\"]"
-        var clobTokenIdsRaw = node["clobTokenIds"]?.GetValue<string>() ?? "[]";
+        var clobTokenIdsRaw = NodeToString(node["clobTokenIds"]) ?? "[]";
         // outcomes is a JSON-stringified array: "[\"YES\",\"NO\"]"
-        var outcomesRaw = node["outcomes"]?.GetValue<string>() ?? "[]";
+        var outcomesRaw = NodeToString(node["outcomes"]) ?? "[]";
 
         string[] tokenIds = new string[0];
         string[] outcomes = new string[0];
@@ -202,5 +216,100 @@ public class PolymarketService
         var active = node["active"]?.GetValue<bool>() ?? true;
 
         return new GammaMarketSummary(id, question, slug, yesTokenId, noTokenId, active);
+    }
+
+    // -----------------------------------------------------------------------
+    // Gamma – popular/trending markets for home page
+    // -----------------------------------------------------------------------
+    /// <summary>
+    /// Calls GET https://gamma-api.polymarket.com/events?active=true&order=volume&ascending=false&limit={limit}
+    /// optionally filtered by tag_slug.  Returns one entry per event using
+    /// the event title and the first valid binary market found inside it.
+    /// outcomePrices (if present) are used to populate YesPct.
+    /// </summary>
+    public async Task<List<PopularMarketDto>> GetPopularMarketsAsync(string? tagSlug, int limit = 20)
+    {
+        var url = $"https://gamma-api.polymarket.com/events?active=true&order=volume&ascending=false&limit={limit}";
+        if (!string.IsNullOrWhiteSpace(tagSlug))
+            url += $"&tag_slug={Uri.EscapeDataString(tagSlug)}";
+
+        var json = await _http.GetStringAsync(url);
+        var root = JsonNode.Parse(json);
+
+        var results = new List<PopularMarketDto>();
+        if (root is not JsonArray events) return results;
+
+        foreach (var ev in events)
+        {
+            var title     = NodeToString(ev?["title"]) ?? "";
+            var eventSlug = NodeToString(ev?["slug"])  ?? "";
+
+            decimal volume = 0;
+            var volNode = ev?["volume"];
+            if (volNode != null)
+            {
+                if (volNode.GetValueKind() == System.Text.Json.JsonValueKind.Number)
+                    volume = volNode.GetValue<decimal>();
+                else
+                    decimal.TryParse(NodeToString(volNode), System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out volume);
+            }
+
+            var markets = ev?["markets"] as JsonArray;
+            if (markets == null || markets.Count == 0) continue;
+
+            // Get primary tag slug from the event's tags array
+            string? tag = null;
+            var tags = ev?["tags"] as JsonArray;
+            if (tags != null && tags.Count > 0)
+                tag = NodeToString(tags[0]?["slug"])
+                   ?? NodeToString(tags[0]?["label"]);
+
+            foreach (var mkt in markets)
+            {
+                var summary = ParseMarketNode(mkt);
+                if (summary == null || !summary.Active) continue;
+
+                // Try to read embedded outcomePrices (JSON-stringified string[])
+                double? yesPct = null;
+                var outcomePricesRaw = NodeToString(mkt?["outcomePrices"]);
+                if (outcomePricesRaw != null)
+                {
+                    try
+                    {
+                        var prices   = JsonSerializer.Deserialize<string[]>(outcomePricesRaw) ?? [];
+                        var outRaw   = mkt?["outcomes"]?.GetValue<string>() ?? "[]";
+                        var outcomes = JsonSerializer.Deserialize<string[]>(outRaw) ?? [];
+                        for (int i = 0; i < outcomes.Length && i < prices.Length; i++)
+                        {
+                            if (outcomes[i].Equals("YES", StringComparison.OrdinalIgnoreCase)
+                                && double.TryParse(prices[i],
+                                    System.Globalization.NumberStyles.Any,
+                                    System.Globalization.CultureInfo.InvariantCulture,
+                                    out var p))
+                            {
+                                yesPct = p * 100;
+                                break;
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
+                results.Add(new PopularMarketDto(
+                    summary.Id,
+                    title.Length > 0 ? title : summary.Question,
+                    eventSlug.Length > 0 ? eventSlug : summary.Slug,
+                    summary.YesTokenId,
+                    summary.NoTokenId,
+                    yesPct,
+                    tag,
+                    volume > 0 ? volume : null
+                ));
+                break; // one entry per event
+            }
+        }
+
+        return results;
     }
 }
